@@ -87,14 +87,28 @@ class PreferredQualityHandler {
 
     #determineQuality(preference) {
         const availableQualities = this.#player.getAvailableQualityData();
+        const getQualityValue = (label) => parseInt(label, 10) || 0;
+
         if (!availableQualities?.length) return 'highres';
 
-        const getQualityValue = (label) => parseInt(label, 10) || 0;
-        const targetValue = getQualityValue(preference);
+        if (preference === 'highest') {
+            const highest = availableQualities.reduce((best, q) =>
+                getQualityValue(q.qualityLabel) > getQualityValue(best.qualityLabel) ? q : best
+            );
+            return highest ? highest.quality : 'highres';
+        }
 
+        if (preference === 'lowest') {
+            const lowest = availableQualities.reduce((best, q) =>
+                getQualityValue(q.qualityLabel) < getQualityValue(best.qualityLabel) ? q : best
+            );
+            return lowest ? lowest.quality : 'small';
+        }
+
+        const targetValue = getQualityValue(preference);
         const match = availableQualities.find(q => getQualityValue(q.qualityLabel) === targetValue);
 
-        return match ? match.quality : 'highres';
+        return match ? match.quality : null;
     }
 }
 

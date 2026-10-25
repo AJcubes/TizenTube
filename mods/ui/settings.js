@@ -397,9 +397,11 @@ export default function modernUI(update, parameters) {
                         subtitle: t('settings.options.videoPlayer.options.preferredVideoQuality.subtitle')
                     },
                     options:
-                        ['Auto', '2160p', '1440p', '1080p', '720p', '480p', '360p', '240p', '144p'].map((quality) => {
+                        ['Highest', 'Lowest', 'Auto', '2160p', '1440p', '1080p', '720p', '480p', '360p', '240p', '144p'].map((quality) => {
                             return {
-                                name: quality === 'Auto' ? t('settings.options.videoPlayer.options.qualityAuto') : quality,
+                                name: quality === 'Auto' ? t('settings.options.videoPlayer.options.qualityAuto') :
+                                    quality === 'Highest' ? (t('settings.options.videoPlayer.options.qualityHighest') || 'Highest') :
+                                    quality === 'Lowest' ? (t('settings.options.videoPlayer.options.qualityLowest') || 'Lowest') : quality,
                                 key: 'preferredVideoQuality',
                                 value: quality.toLowerCase()
                             }

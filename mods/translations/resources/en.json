@@ -111,6 +111,8 @@
                     },
                     "codecAny": "Any",
                     "qualityAuto": "Auto",
+                    "qualityHighest": "Highest",
+                    "qualityLowest": "Lowest",
                     "hideRelatedVideosPlayer": "Hide Related Videos"
                 }
             },
