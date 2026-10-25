@@ -24,13 +24,8 @@ const FROZEN_END_WINDOW_SECONDS = 5;
 const SHORTS_MAX_SECONDS = 200;
 const SHORTS_IDLE_TIMEOUT_MS = 600000;
 const MANUAL_NAV_GUARD_MS = 2500;
-const PAUSE_KEY_GUARD_MS = 10000;
 
 const NAV_KEYCODES = { 38: true, 40: true };
-const PAUSE_KEYCODES = {
-    13: true, 19: true, 23: true, 32: true, 176: true, 177: true, 178: true,
-    179: true, 404: true, 405: true, 406: true, 415: true
-};
 
 let player = null;
 
@@ -40,16 +35,14 @@ let shortsMode = false;
 let lastShortsSignal = 0;
 
 // State for the Short that is currently on screen.
-let shortId = null;
+let lastId = null;
 let lastTime = 0;
-let advancing = false;
+let pressedId = null;
+let lastPressTime = 0;
 let attempts = 0;
-let lastAttemptTime = 0;
-let pressedVideoId = null;
 let frozenSince = 0;
 let frozenAtTime = 0;
 let lastManualNavTime = 0;
-let lastPauseKeyTime = 0;
 
 function getPlayer() {
     if (!player || !document.contains(player)) {
@@ -66,8 +59,12 @@ function getVideo(pl) {
     const videos = document.getElementsByTagName('video');
     for (let i = 0; i < videos.length; i++) {
         const video = videos[i];
-        let score = (video.clientWidth || 0) * (video.clientHeight || 0);
-        if (video.classList && video.classList.contains('html5-main-video')) {
+        const area = (video.clientWidth || 0) * (video.clientHeight || 0);
+        let score = area;
+        // Prefer the YouTube main video, but only when it is actually on
+        // screen; otherwise a hidden player would shadow the Short.
+        if (area > 0 && video.classList &&
+            video.classList.contains('html5-main-video')) {
             score += 1000000000;
         }
         if (!video.currentSrc && !video.src) score -= 1000000;
@@ -137,10 +134,11 @@ function getVideoId(pl) {
     return null;
 }
 
-function getShortId(video, videoId) {
-    if (videoId) return 'v:' + videoId;
+function getId(video, videoId) {
     const src = video ? (video.currentSrc || video.src || '') : '';
-    return src ? 's:' + src : 'unknown';
+    // Combine every signal we have: if either the video id or the media URL
+    // changes, the feed moved to another Short.
+    return (videoId || '') + '|' + src;
 }
 
 function getPlayerState(pl) {
@@ -152,7 +150,7 @@ function getPlayerState(pl) {
 }
 
 function hasPlayerEnded(state) {
-    return !!(state && state.isEnded);
+    return !!(state && (state.isEnded === true || state.playerState === 0));
 }
 
 function pressArrowDown() {
@@ -169,25 +167,19 @@ function pressArrowDown() {
     });
 }
 
-function resetState(id, currentTime) {
-    shortId = id;
-    lastTime = currentTime || 0;
-    advancing = false;
-    attempts = 0;
-    lastAttemptTime = 0;
-    pressedVideoId = null;
-    frozenSince = 0;
-    frozenAtTime = 0;
+function retryDelay() {
+    return attempts < FAST_RETRY_LIMIT ?
+        RETRY_DELAY_MS : SLOW_RETRY_DELAY_MS;
 }
 
-function attemptPress(now) {
-    const delay = attempts < FAST_RETRY_LIMIT ?
-        RETRY_DELAY_MS : SLOW_RETRY_DELAY_MS;
-    if (attempts === 0 || now - lastAttemptTime >= delay) {
-        attempts += 1;
-        lastAttemptTime = now;
-        pressArrowDown();
-    }
+function resetState() {
+    lastId = null;
+    lastTime = 0;
+    pressedId = null;
+    lastPressTime = 0;
+    attempts = 0;
+    frozenSince = 0;
+    frozenAtTime = 0;
 }
 
 function check() {
@@ -203,13 +195,13 @@ function checkInner() {
         // Keep sticky Shorts mode while disabled. The page can stop
         // reporting that the feed is open, so forgetting it here would make
         // turning the setting off and on unable to re-arm inside the feed.
-        resetState(null, 0);
+        resetState();
         return;
     }
 
     const pl = getPlayer();
     if (!pl) {
-        resetState(null, 0);
+        resetState();
         return;
     }
 
@@ -217,7 +209,7 @@ function checkInner() {
     const now = Date.now();
 
     if (!updateShortsMode(pl, video, now)) {
-        resetState(null, 0);
+        resetState();
         return;
     }
 
@@ -227,30 +219,27 @@ function checkInner() {
     const duration = video.duration;
     const durationKnown = isFinite(duration) && duration > 0;
     const videoId = getVideoId(pl);
-    const id = getShortId(video, videoId);
+    const id = getId(video, videoId);
 
-    if (id !== shortId) {
-        // The feed moved to another Short: our press worked, the user
-        // scrolled, or the feed moved on by itself. Re-arm for the new Short.
-        resetState(id, currentTime);
+    // The feed moved to another Short: our press worked, the user scrolled,
+    // or the feed moved on by itself. Re-arm for the new Short.
+    if (id !== lastId) {
+        lastId = id;
+        lastTime = currentTime;
+        pressedId = null;
+        lastPressTime = 0;
+        attempts = 0;
+        frozenSince = 0;
+        frozenAtTime = 0;
         return;
     }
-
-    if (now - lastManualNavTime < MANUAL_NAV_GUARD_MS) {
-        // The user just pressed a navigation key. Never mistake their manual
-        // scroll for the end of a Short.
-        resetState(id, currentTime);
-        return;
-    }
-
-    const state = getPlayerState(pl);
-    const userPaused = now - lastPauseKeyTime < PAUSE_KEY_GUARD_MS;
 
     // Shorts loop back to the start instead of firing "ended".
     const rewound = lastTime > REWIND_SECONDS &&
         currentTime + REWIND_SECONDS < lastTime;
 
     // Native end, player-reported end, or the playhead at the very end.
+    const state = getPlayerState(pl);
     const ended = video.ended === true || hasPlayerEnded(state);
     const nearEnd = durationKnown && currentTime >= duration - NEAR_END_SECONDS;
 
@@ -275,27 +264,26 @@ function checkInner() {
 
     lastTime = currentTime;
 
-    if (advancing) {
-        // A rewind while a press is pending means playback restarted. If the
-        // video id is unchanged, the key was not handled and we keep retrying;
-        // otherwise the feed really moved on.
-        if (rewound) {
-            if (!pressedVideoId || !videoId || videoId !== pressedVideoId) {
-                resetState(id, currentTime);
-                return;
-            }
+    if (!finished) return;
+
+    // The user just pressed a navigation key. Never mistake their manual
+    // scroll for the end of a Short.
+    if (now - lastManualNavTime < MANUAL_NAV_GUARD_MS) return;
+
+    if (pressedId === id) {
+        // Already advancing this Short; retry on a delay so we don't spam
+        // keys while the feed is switching.
+        if (now - lastPressTime >= retryDelay()) {
+            attempts += 1;
+            lastPressTime = now;
+            pressArrowDown();
         }
-        attemptPress(now);
-        return;
+    } else {
+        pressedId = id;
+        attempts = 1;
+        lastPressTime = now;
+        pressArrowDown();
     }
-
-    if (!finished || userPaused) return;
-
-    advancing = true;
-    attempts = 0;
-    lastAttemptTime = 0;
-    pressedVideoId = videoId;
-    attemptPress(now);
 }
 
 onPlayer(function (pl) {
@@ -321,16 +309,8 @@ document.addEventListener('keydown', function (event) {
     if (!event || !event.isTrusted) return;
     const keyCode = event.keyCode || event.which;
 
-    // The user is interacting: never keep sending keys on their behalf.
-    advancing = false;
-    attempts = 0;
-
     if (NAV_KEYCODES[keyCode]) {
         lastManualNavTime = Date.now();
-    }
-
-    if (PAUSE_KEYCODES[keyCode]) {
-        lastPauseKeyTime = Date.now();
     }
 
     // Back left the feed; re-arm once the feed signals Shorts again.
@@ -346,7 +326,7 @@ configChangeEmitter.addEventListener('configChange', function (event) {
     if (event && event.detail && event.detail.key === SETTING_KEY) {
         // Cancel any press in flight, but keep sticky Shorts mode so that
         // toggling the setting does not require a fresh Shorts signal.
-        resetState(null, 0);
+        resetState();
     }
 });
 
