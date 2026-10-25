@@ -16,7 +16,7 @@ function connectToDebugger(host, port, args) {
             client.Page.enable();
 
             client.on('Runtime.executionContextCreated', m => {
-                fetch(`https://cdn.jsdelivr.net/gh/AJcubes/TizenTube@main/dist/userScript.js?ver=${Date.now()}`).then(res => res.text()).then(modFile => {
+                fetch(`https://cdn.jsdelivr.net/gh/AJcubes/TizenTube@30b7a159cf812af006748cd868d04007f3d7cb54/dist/userScript.js?ver=${Date.now()}`).then(res => res.text()).then(modFile => {
                     client.Runtime.evaluate({ expression: modFile, contextId: m.context.id });
                 }).catch(e => {
                     client.Runtime.evaluate({ expression: 'alert("Failed to request to JSDelivr CDN.")', contextId: m.context.id });
