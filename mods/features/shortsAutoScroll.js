@@ -1,4 +1,10 @@
 // Automatically moves to the next Short once the current one finishes.
+//
+// Shorts loop instead of firing "ended", and the page can stop reporting that
+// the Shorts feed is open right after navigating between Shorts. Shorts mode
+// is therefore sticky, and the end of a Short is detected from several
+// independent signals: a loop back to the start, a player-reported end, the
+// playhead reaching the end, or an end screen that stops the playhead.
 
 import { configRead, configChangeEmitter } from '../config.js';
 import { onPlayer } from '../utils/Player.js';
@@ -6,20 +12,32 @@ import { onPlayer } from '../utils/Player.js';
 const SETTING_KEY = 'enableShortsAutoScroll';
 const ARROW_DOWN_KEYCODE = 40;
 
-// Shorts normally loop, so no "ended" event fires. Some Shorts stop on an end
-// screen instead, which also stops "timeupdate". A watchdog keeps this working
-// in both cases, and retries if the navigation key was not handled.
-const POLL_INTERVAL_MS = 400;
-const RETRY_DELAY_MS = 1600;
+const POLL_INTERVAL_MS = 350;
+const RETRY_DELAY_MS = 2000;
 const SLOW_RETRY_DELAY_MS = 4000;
-const FAST_RETRY_LIMIT = 6;
-const END_EPSILON_SECONDS = 1.5;
-const STUCK_AT_END_SECONDS = 0.3;
-const STUCK_AT_END_MS = 1000;
-const REWIND_EPSILON_SECONDS = 1.0;
-const MANUAL_NAV_GUARD_MS = 1200;
+const FAST_RETRY_LIMIT = 5;
+const NEAR_END_SECONDS = 0.35;
+const REWIND_SECONDS = 0.8;
+const FROZEN_EPSILON_SECONDS = 0.05;
+const FROZEN_END_MS = 1200;
+const FROZEN_END_WINDOW_SECONDS = 5;
+const SHORTS_MAX_SECONDS = 200;
+const SHORTS_IDLE_TIMEOUT_MS = 600000;
+const MANUAL_NAV_GUARD_MS = 2500;
+const PAUSE_KEY_GUARD_MS = 10000;
+
+const NAV_KEYCODES = { 38: true, 40: true };
+const PAUSE_KEYCODES = {
+    13: true, 19: true, 23: true, 32: true, 176: true, 177: true, 178: true,
+    179: true, 404: true, 405: true, 406: true, 415: true
+};
 
 let player = null;
+
+// Sticky once the Shorts feed is seen; the page may stop reporting it after
+// navigating between Shorts.
+let shortsMode = false;
+let lastShortsSignal = 0;
 
 // State for the Short that is currently on screen.
 let shortId = null;
@@ -27,9 +45,11 @@ let lastTime = 0;
 let advancing = false;
 let attempts = 0;
 let lastAttemptTime = 0;
-let stuckSince = 0;
-let stuckAtTime = 0;
+let pressedVideoId = null;
+let frozenSince = 0;
+let frozenAtTime = 0;
 let lastManualNavTime = 0;
+let lastPauseKeyTime = 0;
 
 function getPlayer() {
     if (!player || !document.contains(player)) {
@@ -39,19 +59,34 @@ function getPlayer() {
 }
 
 function getVideo(pl) {
-    let video = null;
+    // Pick the largest visible video so a hidden preload or ad cannot be
+    // mistaken for the Short that is on screen.
+    let best = null;
+    let bestScore = -1;
+    const videos = document.getElementsByTagName('video');
+    for (let i = 0; i < videos.length; i++) {
+        const video = videos[i];
+        let score = (video.clientWidth || 0) * (video.clientHeight || 0);
+        if (video.classList && video.classList.contains('html5-main-video')) {
+            score += 1000000000;
+        }
+        if (!video.currentSrc && !video.src) score -= 1000000;
+        if (score > bestScore) {
+            bestScore = score;
+            best = video;
+        }
+    }
+    if (best && bestScore > 0) return best;
     try {
-        video = pl.querySelector('video.html5-main-video');
-    } catch (err) {}
-    if (!video) video = pl.querySelector('video');
-    if (!video) video = document.querySelector('video');
-    return video;
+        return pl.querySelector('video.html5-main-video') ||
+            pl.querySelector('video');
+    } catch (err) {
+        return null;
+    }
 }
 
-function isShorts(pl) {
-    // The route is the most stable signal; player stats can be missing or
-    // change while the Shorts feed is open.
-    if (location.href.indexOf('/shorts') !== -1) return true;
+function hasShortsSignal(pl) {
+    if (location.href.toLowerCase().indexOf('shorts') !== -1) return true;
 
     try {
         const stats = pl.getVideoStats();
@@ -65,27 +100,59 @@ function isShorts(pl) {
     return false;
 }
 
-function getShortId(pl, video) {
-    let videoId = null;
-    try {
-        const data = pl.getVideoData();
-        if (data && data.video_id) videoId = data.video_id;
-    } catch (err) {}
+function updateShortsMode(pl, video, now) {
+    if (hasShortsSignal(pl)) {
+        shortsMode = true;
+        lastShortsSignal = now;
+        return true;
+    }
 
-    const src = video ? (video.currentSrc || video.src || '') : '';
+    if (!shortsMode) return false;
 
-    // If either value changes, the feed moved to another Short.
-    if (videoId && src) return videoId + '|' + src;
-    return videoId || src || null;
-}
+    const currentTime = video ? (video.currentTime || 0) : 0;
+    const duration = video ? video.duration : NaN;
 
-function isPlayerEnded(pl) {
-    try {
-        const state = pl.getPlayerStateObject();
-        return !!(state && state.isEnded);
-    } catch (err) {
+    // Strong evidence that a regular, long video is playing: leave Shorts
+    // mode so normal videos never auto-advance.
+    if (isFinite(duration) && duration > SHORTS_MAX_SECONDS &&
+        currentTime > 5) {
+        shortsMode = false;
         return false;
     }
+
+    // The app left the player entirely for a long time.
+    if (!video && now - lastShortsSignal > SHORTS_IDLE_TIMEOUT_MS) {
+        shortsMode = false;
+        return false;
+    }
+
+    return true;
+}
+
+function getVideoId(pl) {
+    try {
+        const data = pl.getVideoData();
+        if (data && data.video_id) return data.video_id;
+    } catch (err) {}
+    return null;
+}
+
+function getShortId(video, videoId) {
+    if (videoId) return 'v:' + videoId;
+    const src = video ? (video.currentSrc || video.src || '') : '';
+    return src ? 's:' + src : 'unknown';
+}
+
+function getPlayerState(pl) {
+    try {
+        return pl.getPlayerStateObject() || null;
+    } catch (err) {
+        return null;
+    }
+}
+
+function hasPlayerEnded(state) {
+    return !!(state && state.isEnded);
 }
 
 function pressArrowDown() {
@@ -108,8 +175,19 @@ function resetState(id, currentTime) {
     advancing = false;
     attempts = 0;
     lastAttemptTime = 0;
-    stuckSince = 0;
-    stuckAtTime = 0;
+    pressedVideoId = null;
+    frozenSince = 0;
+    frozenAtTime = 0;
+}
+
+function attemptPress(now) {
+    const delay = attempts < FAST_RETRY_LIMIT ?
+        RETRY_DELAY_MS : SLOW_RETRY_DELAY_MS;
+    if (attempts === 0 || now - lastAttemptTime >= delay) {
+        attempts += 1;
+        lastAttemptTime = now;
+        pressArrowDown();
+    }
 }
 
 function check() {
@@ -122,96 +200,102 @@ function check() {
 
 function checkInner() {
     if (!configRead(SETTING_KEY)) {
+        // Keep sticky Shorts mode while disabled. The page can stop
+        // reporting that the feed is open, so forgetting it here would make
+        // turning the setting off and on unable to re-arm inside the feed.
         resetState(null, 0);
         return;
     }
 
     const pl = getPlayer();
-    if (!pl) return;
-
-    const video = getVideo(pl);
-    if (!video) return;
-
-    if (!isShorts(pl)) {
+    if (!pl) {
         resetState(null, 0);
         return;
     }
 
+    const video = getVideo(pl);
     const now = Date.now();
-    const id = getShortId(pl, video);
+
+    if (!updateShortsMode(pl, video, now)) {
+        resetState(null, 0);
+        return;
+    }
+
+    if (!video) return;
+
     const currentTime = video.currentTime || 0;
     const duration = video.duration;
+    const durationKnown = isFinite(duration) && duration > 0;
+    const videoId = getVideoId(pl);
+    const id = getShortId(video, videoId);
 
-    // A different Short is showing: we advanced successfully, the user
-    // scrolled, or the feed moved on. Re-arm for the new one.
     if (id !== shortId) {
+        // The feed moved to another Short: our press worked, the user
+        // scrolled, or the feed moved on by itself. Re-arm for the new Short.
         resetState(id, currentTime);
         return;
     }
 
-    // The user just pressed a navigation key. Re-arm and never mistake their
-    // manual scroll for the end of a Short.
     if (now - lastManualNavTime < MANUAL_NAV_GUARD_MS) {
+        // The user just pressed a navigation key. Never mistake their manual
+        // scroll for the end of a Short.
         resetState(id, currentTime);
         return;
     }
 
-    const hasDuration = isFinite(duration) && duration > 1;
-    const nearEnd = hasDuration &&
-        currentTime >= duration - END_EPSILON_SECONDS;
-    const rewound = lastTime > REWIND_EPSILON_SECONDS &&
-        currentTime + REWIND_EPSILON_SECONDS < lastTime;
-    const lastWasAtEnd = hasDuration &&
-        lastTime >= duration - END_EPSILON_SECONDS;
+    const state = getPlayerState(pl);
+    const userPaused = now - lastPauseKeyTime < PAUSE_KEY_GUARD_MS;
 
     // Shorts loop back to the start instead of firing "ended".
-    const wrapped = rewound && lastWasAtEnd;
+    const rewound = lastTime > REWIND_SECONDS &&
+        currentTime + REWIND_SECONDS < lastTime;
 
-    // Native end, player-reported end, or a frozen end screen.
-    const ended = video.ended === true || isPlayerEnded(pl);
+    // Native end, player-reported end, or the playhead at the very end.
+    const ended = video.ended === true || hasPlayerEnded(state);
+    const nearEnd = durationKnown && currentTime >= duration - NEAR_END_SECONDS;
 
-    let stuckAtEnd = false;
-    if (hasDuration && nearEnd && currentTime >= duration - STUCK_AT_END_SECONDS) {
-        if (stuckSince === 0 || Math.abs(currentTime - stuckAtTime) > 0.05) {
-            stuckSince = now;
-            stuckAtTime = currentTime;
-        } else if (now - stuckSince >= STUCK_AT_END_MS) {
-            stuckAtEnd = true;
+    // A frozen end screen: the playhead stopped moving near the end. This
+    // covers end cards that pause the video without reporting "ended".
+    let frozenAtEnd = false;
+    if (durationKnown && currentTime > 1 &&
+        currentTime >= duration - FROZEN_END_WINDOW_SECONDS) {
+        if (frozenSince === 0 ||
+            Math.abs(currentTime - frozenAtTime) > FROZEN_EPSILON_SECONDS) {
+            frozenSince = now;
+            frozenAtTime = currentTime;
+        } else if (now - frozenSince >= FROZEN_END_MS) {
+            frozenAtEnd = true;
         }
     } else {
-        stuckSince = 0;
-        stuckAtTime = 0;
+        frozenSince = 0;
+        frozenAtTime = 0;
     }
 
-    const finished = ended || wrapped || stuckAtEnd;
+    const finished = ended || rewound || nearEnd || frozenAtEnd;
 
     lastTime = currentTime;
 
-    if (!finished) {
-        // Playback is running again (or was replayed); wait for the next real
-        // ending instead of sending more keys.
-        if (advancing) {
-            advancing = false;
-            attempts = 0;
-            lastAttemptTime = 0;
+    if (advancing) {
+        // A rewind while a press is pending means playback restarted. If the
+        // video id is unchanged, the key was not handled and we keep retrying;
+        // otherwise the feed really moved on.
+        if (rewound) {
+            if (!pressedVideoId || !videoId || videoId !== pressedVideoId) {
+                resetState(id, currentTime);
+                return;
+            }
         }
+        attemptPress(now);
         return;
     }
 
-    if (!advancing) {
-        advancing = true;
-        attempts = 0;
-        lastAttemptTime = 0;
-    }
+    if (!finished || userPaused) return;
 
-    const retryDelay = attempts < FAST_RETRY_LIMIT ?
-        RETRY_DELAY_MS : SLOW_RETRY_DELAY_MS;
-
-    if (attempts === 0 || now - lastAttemptTime >= retryDelay) {
-        attempts += 1;
-        lastAttemptTime = now;
-        pressArrowDown();
-    }
+    advancing = true;
+    attempts = 0;
+    lastAttemptTime = 0;
+    pressedVideoId = videoId;
+    attemptPress(now);
 }
 
 onPlayer(function (pl) {
@@ -227,18 +311,41 @@ function onMediaEvent(event) {
 }
 document.addEventListener('timeupdate', onMediaEvent, true);
 document.addEventListener('ended', onMediaEvent, true);
+document.addEventListener('playing', onMediaEvent, true);
+document.addEventListener('pause', onMediaEvent, true);
+document.addEventListener('seeking', onMediaEvent, true);
+document.addEventListener('seeked', onMediaEvent, true);
 
 // Real remote presses are trusted; our synthetic ones are not.
 document.addEventListener('keydown', function (event) {
     if (!event || !event.isTrusted) return;
     const keyCode = event.keyCode || event.which;
-    if (keyCode === 38 || keyCode === 40) {
+
+    // The user is interacting: never keep sending keys on their behalf.
+    advancing = false;
+    attempts = 0;
+
+    if (NAV_KEYCODES[keyCode]) {
+        lastManualNavTime = Date.now();
+    }
+
+    if (PAUSE_KEYCODES[keyCode]) {
+        lastPauseKeyTime = Date.now();
+    }
+
+    // Back left the feed; re-arm once the feed signals Shorts again.
+    if (keyCode === 27 || keyCode === 403 || keyCode === 461 ||
+        keyCode === 10009) {
+        shortsMode = false;
+        lastShortsSignal = 0;
         lastManualNavTime = Date.now();
     }
 }, true);
 
 configChangeEmitter.addEventListener('configChange', function (event) {
     if (event && event.detail && event.detail.key === SETTING_KEY) {
+        // Cancel any press in flight, but keep sticky Shorts mode so that
+        // toggling the setting does not require a fresh Shorts signal.
         resetState(null, 0);
     }
 });
