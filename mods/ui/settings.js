@@ -6,6 +6,9 @@ import resolveCommand from '../resolveCommand.js';
 
 const qrcodes = {};
 
+// Injected at build time from the root package.json version (see rollup.config.js).
+const TIZENTUBE_VERSION = process.env.TIZENTUBE_VERSION;
+
 export default function modernUI(update, parameters) {
     const settings = [
         {
@@ -32,7 +35,7 @@ export default function modernUI(update, parameters) {
             options: [
                 {
                     name: 'GitHub',
-                    link: 'https://github.com/reisxd/TizenTube',
+                    link: 'https://github.com/AJcubes/TizenTube',
                 },
                 {
                     name: 'YouTube',
@@ -289,6 +292,11 @@ export default function modernUI(update, parameters) {
                     name: t('settings.options.misc.options.shorts'),
                     icon: 'YOUTUBE_SHORTS_FILL_24',
                     value: 'enableShorts'
+                },
+                {
+                    name: t('settings.options.misc.options.shortsAutoScroll'),
+                    icon: 'YOUTUBE_SHORTS_FILL_24',
+                    value: 'enableShortsAutoScroll'
                 },
                 {
                     name: t('settings.options.misc.options.videoPreviews'),
@@ -856,7 +864,7 @@ export default function modernUI(update, parameters) {
     showModal(
         {
             title: t('settings.ttSettings.title'),
-            subtitle: t('settings.ttSettings.madeByText')
+            subtitle: t('settings.ttSettings.madeByText') + ' · mods v' + TIZENTUBE_VERSION
         },
         overlayPanelItemListRenderer(buttons, parameters && parameters.length > 0 ? parameters[0] : 0),
         'tt-settings',
