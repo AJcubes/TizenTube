@@ -1,14 +1,13 @@
 import { getGuide } from '../utils/innerTubeCalls.js';
 import { configRead, configWrite } from '../config.js';
-import { buttonItem, overlayPanelItemListRenderer, showModal } from './ytUI.js';
+import { buttonItem, overlayPanelItemListRenderer, showModal, getGuideItemKey } from './ytUI.js';
 import { t } from 'i18next';
 
 function showSetting(settingType, parameters) {
     if (settingType === 'MOVE_GUIDE_BUTTON') {
         const order = configRead('sidebarContentsOrder');
 
-        const browseId = parameters.item.guideEntryRenderer.navigationEndpoint?.browseEndpoint?.browseId
-            || (parameters.item.guideEntryRenderer.navigationEndpoint?.searchEndpoint && 'search');
+        const browseId = getGuideItemKey(parameters.item);
         const index = order.findIndex(item => {
             if (typeof item === 'object' && item !== null) {
                 return item.browseId === browseId;
@@ -110,7 +109,7 @@ function showSetting(settingType, parameters) {
         for (const item of guideItems) {
             const title = item.guideEntryRenderer.formattedTitle.simpleText;
             const icon = item.guideEntryRenderer.icon?.iconType;
-            const browseId = item.guideEntryRenderer.navigationEndpoint?.browseEndpoint ? item.guideEntryRenderer.navigationEndpoint.browseEndpoint.browseId : 'search';
+            const browseId = getGuideItemKey(item);
 
             buttons.push(
                 buttonItem(

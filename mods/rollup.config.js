@@ -5,6 +5,9 @@ import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import replace from '@rollup/plugin-replace';
 import json from '@rollup/plugin-json';
+import { readFileSync } from 'fs';
+
+const rootPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 export default {
     input: "userScript.js",
@@ -35,6 +38,7 @@ export default {
             mangle: true,
         }),
         replace({
+            'process.env.TIZENTUBE_VERSION': JSON.stringify(rootPackage.version),
             '\uFFFF': '\u0000',
         })
     ]

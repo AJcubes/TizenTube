@@ -1,6 +1,29 @@
 import { configChangeEmitter, configRead, configWrite } from "../config.js";
 import getCommandExecutor from "./customCommandExecution.js";
-import { GuideEntryRenderer } from "./ytUI.js";
+import { GuideEntryRenderer, getGuideItemKey, isHomeGuideItem, isShortsGuideItem } from "./ytUI.js";
+
+// Shorts has no stable browseId, so it was historically never learned into the
+// sort order and ended up pinned at the bottom. Move its key directly beneath
+// Home's key in the stored order. Mutates `order` and returns whether it changed.
+function placeShortsUnderHome(order, items) {
+    const homeItem = items.find(isHomeGuideItem);
+    const shortsItem = items.find(isShortsGuideItem);
+    if (!homeItem || !shortsItem) return false;
+
+    const homeKey = getGuideItemKey(homeItem);
+    const shortsKey = getGuideItemKey(shortsItem);
+    if (!homeKey || !shortsKey) return false;
+
+    const keyOf = orderItem => (typeof orderItem === 'object' && orderItem !== null ? orderItem.browseId : orderItem);
+    const homeIndex = order.findIndex(orderItem => keyOf(orderItem) === homeKey);
+    const shortsIndex = order.findIndex(orderItem => keyOf(orderItem) === shortsKey);
+
+    if (homeIndex === -1 || shortsIndex === -1 || shortsIndex === homeIndex + 1) return false;
+
+    const [shorts] = order.splice(shortsIndex, 1);
+    order.splice(homeIndex + 1, 0, shorts);
+    return true;
+}
 
 const origParse = JSON.parse;
 JSON.parse = function () {
@@ -12,8 +35,7 @@ JSON.parse = function () {
         for (const item of guideSection.items) {
             // Not every guide item is a guideEntryRenderer: a throw here would fail
             // the caller's JSON.parse and lose the whole guide response.
-            const itemOrder = item.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId
-                || (item.guideEntryRenderer?.navigationEndpoint?.searchEndpoint && 'search');
+            const itemOrder = getGuideItemKey(item);
             if (itemOrder && !order.some(orderItem =>
                 (typeof orderItem === 'object' ? orderItem.browseId : orderItem) === itemOrder)) {
                 order.push(itemOrder);
@@ -22,16 +44,24 @@ JSON.parse = function () {
         }
         if (orderChanged) configWrite('sidebarContentsOrder', order);
     }
+
+    // One-time migration: place Shorts directly beneath Home in the stored
+    // order. After that the user's manual ordering wins.
+    if (guideSection && Array.isArray(order) && !configRead('sidebarShortsPositioned')) {
+        configWrite('sidebarShortsPositioned', true);
+        if (placeShortsUnderHome(order, guideSection.items)) {
+            configWrite('sidebarContentsOrder', order);
+        }
+    }
+
     if (configRead('sidebarContentsOrder')?.length === 0) {
        // Add all of the items in the sidebar to the sidebarContentsOrder
         if (r.items && Array.isArray(r.items) && r.items[0].guideSectionRenderer) {
             const order = [];
             for (const item of r.items[0].guideSectionRenderer.items) {
-                const browseId = item.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
-                if (browseId) {
-                    order.push(browseId);
-                } else if (item.guideEntryRenderer?.navigationEndpoint?.searchEndpoint) {
-                    order.push('search');
+                const key = getGuideItemKey(item);
+                if (key) {
+                    order.push(key);
                 }
             }
             configWrite('sidebarContentsOrder', order);
@@ -63,10 +93,7 @@ JSON.parse = function () {
             const placed = new Set();
             for (const orderItem of order) {
                 const browseId = typeof orderItem === 'object' ? orderItem.browseId : orderItem;
-                const index = copiedItems.findIndex(item => {
-                    const itemBrowseId = item.guideEntryRenderer?.navigationEndpoint?.browseEndpoint?.browseId;
-                    return itemBrowseId === browseId || (browseId === 'search' && item.guideEntryRenderer?.navigationEndpoint?.searchEndpoint);
-                });
+                const index = copiedItems.findIndex(item => getGuideItemKey(item) === browseId);
                 if (index !== -1) {
                     orderedItems.push(copiedItems[index]);
                     placed.add(index);
@@ -74,8 +101,8 @@ JSON.parse = function () {
             }
             // Entries the stored order knows nothing about must survive, after the
             // ordered ones. The order is not scoped to a profile: it is learned from
-            // whichever profile loads first, and only from entries exposing a
-            // browseEndpoint.browseId. A YouTube Kids profile's guide entries don't,
+            // whichever profile loads first, and only from entries exposing a usable
+            // key (see getGuideItemKey). A YouTube Kids profile's guide entries don't,
             // so they were neither learned above nor matched here — dropping them
             // emptied the whole left menu on that profile (#643, #648).
             copiedItems.forEach((item, index) => {
@@ -95,9 +122,7 @@ JSON.parse = function () {
                 const item = section.items[j].guideEntryRenderer;
                 if (!item) continue;
                 if ((disabledSidebarContents?.length &&
-                    disabledSidebarContents.includes(item.navigationEndpoint?.browseEndpoint ?
-                        item.navigationEndpoint.browseEndpoint.browseId :
-                        'search'))
+                    disabledSidebarContents.includes(getGuideItemKey(item)))
                     || (disableChannelsOnSidebar && item?.thumbnail)) {
                     section.items.splice(j, 1);
                     j--;

@@ -30,7 +30,7 @@ Follow the guide in the [Installation Guide](./docs/README.md).
 - ❗ **SponsorBlock Support**: Automatically skip sponsored segments in videos.
 - ⏭️ **Video Speed Control**: Adjust playback speed to your preference.
 - 🔺 **[DeArrow](https://dearrow.ajay.app/) Support**: Remove clickbait and misleading video titles.
-- ➕ **More to come!** Request features via [issues](https://github.com/reisxd/TizenTube/issues/new).
+- ➕ **More to come!** Request features via [issues](https://github.com/AJcubes/TizenTube/issues/new).
 
 ## 🌐 Community and Support 
 | Links |
@@ -39,4 +39,4 @@ Follow the guide in the [Installation Guide](./docs/README.md).
 | [Discord Server](https://discord.gg/m2P7v8Y2qR)  | 
 | [Telegram](https://t.me/tizentubeofficial)  |
 | [Matrix Space](https://matrix.to/#/!BLE5ubNYktI30e8K0j:matrix.6513006.xyz)  |
-| [Report Issues / Request Features](https://github.com/reisxd/TizenTube/issues)  |
+| [Report Issues / Request Features](https://github.com/AJcubes/TizenTube/issues)  |

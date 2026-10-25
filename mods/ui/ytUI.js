@@ -458,6 +458,51 @@ function ButtonRenderer(disabled, text, iconType, command) {
     };
 }
 
+// Resolve a stable identifier for a guide entry so it can be sorted and matched
+// consistently. Most entries expose a browseEndpoint.browseId, but Shorts (and a
+// few other entries) omit it and must fall back to their URL or title/icon.
+function getGuideItemKey(item) {
+    const renderer = item?.guideEntryRenderer || item;
+    const nav = renderer?.navigationEndpoint;
+
+    if (nav?.browseEndpoint?.browseId) return nav.browseEndpoint.browseId;
+    if (nav?.searchEndpoint) return 'search';
+    if (nav?.browseEndpoint?.canonicalBaseUrl) return nav.browseEndpoint.canonicalBaseUrl;
+    if (nav?.urlEndpoint?.url) return nav.urlEndpoint.url;
+    if (nav?.commandMetadata?.webCommandMetadata?.url) return nav.commandMetadata.webCommandMetadata.url;
+
+    const icon = renderer?.icon?.iconType;
+    if (icon) return icon;
+
+    const title = renderer?.formattedTitle?.simpleText || renderer?.formattedTitle?.runs?.[0]?.text;
+    if (title) return title.toLowerCase().replace(/\s+/g, '_');
+
+    return null;
+}
+
+// Identify the Home and Shorts guide entries. Icon types vary across clients,
+// so match on the navigation target as well as the icon.
+function isHomeGuideItem(item) {
+    const renderer = item?.guideEntryRenderer || item;
+    const nav = renderer?.navigationEndpoint;
+    const browseId = nav?.browseEndpoint?.browseId;
+    const icon = renderer?.icon?.iconType;
+    return browseId === 'FEtopics' || browseId === 'FEwhat_to_watch' || icon === 'WHAT_TO_WATCH';
+}
+
+function isShortsGuideItem(item) {
+    const renderer = item?.guideEntryRenderer || item;
+    const nav = renderer?.navigationEndpoint;
+    const browseId = nav?.browseEndpoint?.browseId;
+    const canonical = nav?.browseEndpoint?.canonicalBaseUrl;
+    const url = nav?.urlEndpoint?.url || nav?.commandMetadata?.webCommandMetadata?.url;
+    const icon = renderer?.icon?.iconType;
+    return browseId === 'FEshorts'
+        || canonical === '/shorts'
+        || (typeof url === 'string' && /\/shorts\/?$/.test(url))
+        || icon === 'SHORTS';
+}
+
 function GuideEntryRenderer(simpleText, navigationEndpoint, icon, thumbnail) {
     const guideEntryRenderer = {
         guideEntryRenderer: {
@@ -507,5 +552,8 @@ export {
     TileRenderer,
     QrCodeRenderer,
     ButtonRenderer,
-    GuideEntryRenderer
+    GuideEntryRenderer,
+    getGuideItemKey,
+    isHomeGuideItem,
+    isShortsGuideItem
 }
