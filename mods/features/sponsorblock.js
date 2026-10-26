@@ -54,6 +54,134 @@ const barTypes = {
 
 const sponsorblockAPI = 'https://sponsor.ajay.app/api';
 
+// SponsorBlock used to key off hashchange only, which never fires while the
+// Shorts feed scrolls between videos. Track the current video ourselves so
+// Shorts get segments too.
+const SHORTS_POLL_MS = 350;
+const SHORTS_MAX_SECONDS = 200;
+const SHORTS_IDLE_TIMEOUT_MS = 600000;
+
+// Sticky: the page can stop reporting that the feed is open right after a
+// transition, so remember Shorts until a long video clearly takes over.
+let shortsMode = false;
+let lastShortsSignal = 0;
+
+function getPlayer() {
+  return document.querySelector('.html5-video-player');
+}
+
+function visibleVideo() {
+  // Pick the largest visible video so a hidden preload cannot be mistaken for
+  // the video that is actually on screen.
+  let best = null;
+  let bestScore = -1;
+  const videos = document.getElementsByTagName('video');
+  for (let i = 0; i < videos.length; i++) {
+    const video = videos[i];
+    const area = (video.clientWidth || 0) * (video.clientHeight || 0);
+    let score = area;
+    if (area > 0 && video.classList &&
+        video.classList.contains('html5-main-video')) {
+      score += 1000000000;
+    }
+    if (!video.paused && !video.ended) score += 100000;
+    if (!video.currentSrc && !video.src) score -= 1000000;
+    if (score > bestScore) {
+      bestScore = score;
+      best = video;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function hasShortsSignal() {
+  if (location.href.toLowerCase().indexOf('shorts') !== -1) return true;
+
+  const player = getPlayer();
+  if (!player || typeof player.getVideoStats !== 'function') return false;
+  try {
+    const stats = player.getVideoStats();
+    const keys = Object.keys(stats || {});
+    for (let i = 0; i < keys.length; i++) {
+      if (stats[keys[i]] === 'shortspage') return true;
+    }
+  } catch (err) {}
+  return false;
+}
+
+function updateShortsMode(video) {
+  const now = Date.now();
+  if (hasShortsSignal()) {
+    shortsMode = true;
+    lastShortsSignal = now;
+    return true;
+  }
+
+  if (!shortsMode) return false;
+
+  // A clearly long video means we left the feed even if the page still
+  // reports Shorts for a moment.
+  const duration = video ? video.duration : NaN;
+  const currentTime = video ? (video.currentTime || 0) : 0;
+  if (isFinite(duration) && duration > SHORTS_MAX_SECONDS && currentTime > 5) {
+    shortsMode = false;
+    return false;
+  }
+
+  if (!video && now - lastShortsSignal > SHORTS_IDLE_TIMEOUT_MS) {
+    shortsMode = false;
+    return false;
+  }
+
+  return true;
+}
+
+function playerVideoId() {
+  const player = getPlayer();
+  if (player && typeof player.getVideoData === 'function') {
+    try {
+      const data = player.getVideoData();
+      if (data && data.video_id) return data.video_id;
+    } catch (err) {}
+  }
+  return null;
+}
+
+// The Short that is actually on screen, or null when this is a regular video.
+function shortsVideoId() {
+  const video = visibleVideo();
+  if (!updateShortsMode(video)) return null;
+
+  // Do not mistake a long video for a Short while the sticky flag is still
+  // set right after leaving the feed.
+  if (video) {
+    const duration = video.duration;
+    if (isFinite(duration) && duration > SHORTS_MAX_SECONDS) return null;
+  }
+
+  const fromPlayer = playerVideoId();
+  if (fromPlayer) return fromPlayer;
+
+  const source = (location.hash || '') + ' ' + location.href;
+  const match = source.match(/\/shorts\/([A-Za-z0-9_-]{6,})/);
+  return match ? match[1] : null;
+}
+
+function resolveVideo() {
+  const shortsId = shortsVideoId();
+  if (shortsId) return { videoID: shortsId, isShorts: true };
+
+  // A hack, but it works: the TV app puts the watch URL in the hash.
+  let videoID = null;
+  try {
+    const hashURL = new URL(location.hash.substring(1), location.href);
+    const fromHash = hashURL.searchParams.get('v');
+    const fromURL = new URL(location.href).searchParams.get('v');
+    videoID = fromHash || fromURL || null;
+  } catch (err) {}
+  return { videoID: videoID, isShorts: false };
+}
+
 class SponsorBlockHandler {
   video = null;
   active = true;
@@ -70,8 +198,9 @@ class SponsorBlockHandler {
   manualSkippableCategories = [];
   skippedCategories = new Map();
 
-  constructor(videoID) {
+  constructor(videoID, isShorts) {
     this.videoID = videoID;
+    this.isShorts = !!isShorts;
   }
 
   async init() {
@@ -94,6 +223,9 @@ class SponsorBlockHandler {
     );
     const results = await resp.json();
 
+    // The feed may have moved on while the request was in flight.
+    if (!this.active) return;
+
     const result = results.find((v) => v.videoID === this.videoID);
     console.info(this.videoID, 'Got it:', result);
 
@@ -107,18 +239,22 @@ class SponsorBlockHandler {
     this.skippableCategories = this.getSkippableCategories();
 
     this.scheduleSkipHandler = () => {
-      const slider = document.querySelector('div[idomkey="slider"]');
-      const sliderRect = slider?.getBoundingClientRect();
-      const isOldUI = !document.querySelector('div[idomkey="Metadata-Section"]');
-      if (isOldUI && sliderRect) {
-        this.segmentsoverlay.style.setProperty('top', `${sliderRect.top}px`, 'important');
+      if (!this.isShorts && this.segmentsoverlay) {
+        const slider = document.querySelector('div[idomkey="slider"]');
+        const sliderRect = slider?.getBoundingClientRect();
+        const isOldUI = !document.querySelector('div[idomkey="Metadata-Section"]');
+        if (isOldUI && sliderRect) {
+          this.segmentsoverlay.style.setProperty('top', `${sliderRect.top}px`, 'important');
+        }
       }
       this.scheduleSkip();
     }
     this.durationChangeHandler = () => this.buildOverlay();
 
     this.attachVideo();
-    this.buildOverlay();
+    // Shorts have no progress bar to draw segment markers on, and the slider
+    // retry loop would never resolve there.
+    if (!this.isShorts) this.buildOverlay();
   }
 
   getSkippableCategories() {
@@ -154,12 +290,21 @@ class SponsorBlockHandler {
     clearTimeout(this.attachVideoTimeout);
     this.attachVideoTimeout = null;
 
-    this.video = document.querySelector('video');
-    if (!this.video) {
+    // On Shorts the first <video> can be a hidden preload; bind to the one on
+    // screen instead.
+    const next = visibleVideo() || document.querySelector('video');
+    if (!next) {
       console.info(this.videoID, 'No video yet...');
       this.attachVideoTimeout = setTimeout(() => this.attachVideo(), 100);
       return;
     }
+
+    // The feed can swap the element between Shorts; never keep listeners on a
+    // detached video.
+    if (next === this.video) return;
+
+    this.detachVideo();
+    this.video = next;
 
     console.info(this.videoID, 'Video found, binding...');
 
@@ -169,7 +314,29 @@ class SponsorBlockHandler {
     this.video.addEventListener('durationchange', this.durationChangeHandler);
   }
 
+  // Rebind if the video that was playing was replaced or removed.
+  reattachIfNeeded() {
+    if (!this.video || !document.contains(this.video)) {
+      this.attachVideo();
+    }
+  }
+
+  detachVideo() {
+    if (this.video) {
+      this.video.removeEventListener('play', this.scheduleSkipHandler);
+      this.video.removeEventListener('pause', this.scheduleSkipHandler);
+      this.video.removeEventListener('timeupdate', this.scheduleSkipHandler);
+      this.video.removeEventListener(
+        'durationchange',
+        this.durationChangeHandler
+      );
+      this.video = null;
+    }
+  }
+
   buildOverlay() {
+    if (this.isShorts) return;
+
     if (this.segmentsoverlay) {
       console.info('Overlay already built');
       return;
@@ -262,6 +429,13 @@ class SponsorBlockHandler {
       return;
     }
 
+    // The feed may have moved on before the poll swapped handlers; never skip
+    // using the previous Short's segments.
+    if (this.isShorts) {
+      const activeId = playerVideoId();
+      if (activeId && activeId !== this.videoID) return;
+    }
+
     if (this.video.paused) {
       console.info(this.videoID, 'Currently paused, ignoring...');
       return;
@@ -270,11 +444,19 @@ class SponsorBlockHandler {
     // Sometimes timeupdate event (that calls scheduleSkip) gets fired right before
     // already scheduled skip routine below. Let's just look back a little bit
     // and, in worst case, perform a skip at negative interval (immediately)...
-    const nextSegments = this.segments.filter(
-      (seg) =>
-        seg.segment[0] > this.video.currentTime - 0.3 &&
-        seg.segment[1] > this.video.currentTime - 0.3
-    );
+    const currentTime = this.video.currentTime;
+    const nextSegments = this.segments.filter((seg) => {
+      // Shorts are often already past the segment start by the time the API
+      // responds, so also catch a segment we are currently inside.
+      if (this.isShorts &&
+          this.skippableCategories.includes(seg.category) &&
+          seg.segment[0] <= currentTime &&
+          seg.segment[1] > currentTime + 0.1) {
+        return true;
+      }
+      return seg.segment[0] > currentTime - 0.3 &&
+        seg.segment[1] > currentTime - 0.3;
+    });
     nextSegments.sort((s1, s2) => s1.segment[0] - s2.segment[0]);
 
     if (!nextSegments.length) {
@@ -293,6 +475,9 @@ class SponsorBlockHandler {
     );
 
     this.nextSkipTimeout = setTimeout(() => {
+      // The handler may have been swapped to the next Short after this timer
+      // was queued.
+      if (!this.active) return;
       if (this.video.paused) {
         console.info(this.videoID, 'Currently paused, ignoring...');
         return;
@@ -375,15 +560,7 @@ class SponsorBlockHandler {
       this.segmentsoverlay = null;
     }
 
-    if (this.video) {
-      this.video.removeEventListener('play', this.scheduleSkipHandler);
-      this.video.removeEventListener('pause', this.scheduleSkipHandler);
-      this.video.removeEventListener('timeupdate', this.scheduleSkipHandler);
-      this.video.removeEventListener(
-        'durationchange',
-        this.durationChangeHandler
-      );
-    }
+    this.detachVideo();
 
     this.skippedCategories.clear();
   }
@@ -397,41 +574,56 @@ class SponsorBlockHandler {
 // shows my lack of understanding of javascript. (or both)
 window.sponsorblock = null;
 
-window.addEventListener(
-  'hashchange',
-  () => {
-    const newURL = new URL(location.hash.substring(1), location.href);
-    // A hack, but it works, so...
-    const videoID = newURL.search.replace('?v=', '').split('&')[0];
-    const needsReload =
-      videoID &&
-      (!window.sponsorblock || window.sponsorblock.videoID != videoID);
+function syncHandler() {
+  const resolved = resolveVideo();
+  const videoID = resolved.videoID;
+  const needsReload =
+    videoID &&
+    (!window.sponsorblock || window.sponsorblock.videoID != videoID);
 
-    console.info(
-      'hashchange',
-      videoID,
-      window.sponsorblock,
-      window.sponsorblock ? window.sponsorblock.videoID : null,
-      needsReload
-    );
-
-    if (needsReload) {
-      if (window.sponsorblock) {
-        try {
-          window.sponsorblock.destroy();
-        } catch (err) {
-          console.warn('window.sponsorblock.destroy() failed!', err);
-        }
-        window.sponsorblock = null;
-      }
-
-      if (configRead('enableSponsorBlock')) {
-        window.sponsorblock = new SponsorBlockHandler(videoID);
-        window.sponsorblock.init();
-      } else {
-        console.info('SponsorBlock disabled, not loading');
-      }
+  if (!needsReload) {
+    if (window.sponsorblock && window.sponsorblock.reattachIfNeeded) {
+      window.sponsorblock.reattachIfNeeded();
     }
-  },
-  false
-);
+    return;
+  }
+
+  console.info(
+    'SponsorBlock video change',
+    videoID,
+    resolved.isShorts ? '(shorts)' : '',
+    window.sponsorblock ? window.sponsorblock.videoID : null
+  );
+
+  if (window.sponsorblock) {
+    try {
+      window.sponsorblock.destroy();
+    } catch (err) {
+      console.warn('window.sponsorblock.destroy() failed!', err);
+    }
+    window.sponsorblock = null;
+  }
+
+  if (configRead('enableSponsorBlock')) {
+    window.sponsorblock = new SponsorBlockHandler(videoID, resolved.isShorts);
+    window.sponsorblock.init();
+  } else {
+    console.info('SponsorBlock disabled, not loading');
+  }
+}
+
+window.addEventListener('hashchange', syncHandler, false);
+// Shorts change video without a hashchange, so poll for the current video.
+setInterval(syncHandler, SHORTS_POLL_MS);
+
+// Back leaves the feed. Drop the sticky flag right away so a short regular
+// video watched afterwards is not mistaken for a Short.
+document.addEventListener('keydown', (event) => {
+  if (!event || !event.isTrusted) return;
+  const keyCode = event.keyCode || event.which;
+  if (keyCode === 27 || keyCode === 403 || keyCode === 461 ||
+      keyCode === 10009) {
+    shortsMode = false;
+    lastShortsSignal = 0;
+  }
+}, true);

@@ -1,6 +1,7 @@
 // Hold OK to play at 2x speed while the button is held, then restore the
 // previous speed on release. Mirrors the "press and hold" gesture from the
-// YouTube mobile app. Works on the watch page and in Shorts.
+// YouTube mobile app. Only applies to regular videos on the watch page —
+// holding OK in Shorts is not useful, so those keep their normal actions.
 //
 // A short press is left completely untouched: we never intercept keydown, so
 // the app's normal OK action (play/pause, controls, Shorts actions, ...) still
@@ -119,8 +120,10 @@ function isShorts() {
     return false;
 }
 
+// Shorts are deliberately excluded: the burst fought the feed's per-Short
+// playbackRate resets, and a long press there is not useful.
 function isPlaybackRoute() {
-    return location.href.indexOf('/watch') !== -1 || isShorts();
+    return location.href.indexOf('/watch') !== -1 && !isShorts();
 }
 
 function focusedElement() {
@@ -129,22 +132,7 @@ function focusedElement() {
     return document.querySelector('.zylon-focus') || document.activeElement;
 }
 
-function isInsideVideoContainer(video, element) {
-    if (!video || !element) return false;
-
-    // Focus may sit on the video itself, on a container above it (the whole
-    // Shorts row) or on something inside it.
-    if (element === video || element.contains(video)) return true;
-
-    let node = video;
-    while (node && node !== document.body) {
-        if (node.contains && node.contains(element)) return true;
-        node = node.parentElement;
-    }
-    return false;
-}
-
-function isPlayerFocused(video) {
+function isPlayerFocused() {
     const focused = focusedElement();
     if (!focused || focused === document.body || focused === document.documentElement) {
         return true;
@@ -157,12 +145,6 @@ function isPlayerFocused(video) {
     } catch (err) {}
 
     if (interactive) return false;
-
-    // The Shorts feed renders its video controls outside the player container,
-    // so accept any non-interactive focus that shares the video's container.
-    if (isShorts() && video && isInsideVideoContainer(video, focused)) {
-        return true;
-    }
 
     const player = getPlayer();
     return !!(player && (focused === player || player.contains(focused) ||
@@ -187,7 +169,7 @@ function canStartHold() {
     }
     if (!playing) return false;
 
-    return isPlayerFocused(videos[0]);
+    return isPlayerFocused();
 }
 
 function resumePlayback(video) {
