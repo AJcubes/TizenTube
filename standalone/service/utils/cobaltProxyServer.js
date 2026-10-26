@@ -155,7 +155,7 @@ function startServer() {
                                 ''
                             );
 
-                            body = body.replace('</body>', `<script src="https://cdn.jsdelivr.net/gh/AJcubes/TizenTube@5ee816227539ccd69ac1c8227c70e97217820b53/dist/userScript.js?ver=${Date.now()}"></script></body>`);
+                            body = body.replace('</body>', `<script src="https://cdn.jsdelivr.net/gh/AJcubes/TizenTube@cc03528c94813dbe9d98ff941404192b5d94154b/dist/userScript.js?ver=${Date.now()}"></script></body>`);
 
                             headers['content-length'] = Buffer.byteLength(body, 'utf8');
                             headers['connection'] = 'close';
