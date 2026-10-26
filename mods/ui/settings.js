@@ -289,6 +289,10 @@ export default function modernUI(update, parameters) {
                     value: 'enableLongPress'
                 },
                 {
+                    name: t('settings.options.misc.options.longPressSpeed'),
+                    value: 'enableLongPressSpeed'
+                },
+                {
                     name: t('settings.options.misc.options.shorts'),
                     icon: 'YOUTUBE_SHORTS_FILL_24',
                     value: 'enableShorts'

@@ -22,6 +22,7 @@ import "./features/pictureInPicture.js";
 import "./features/preferredVideoQuality.js";
 import "./features/videoQueuing.js";
 import "./features/shortsAutoScroll.js";
+import "./features/longPressSpeed.js";
 import "./features/enableFeatures.js";
 import "./ui/customUI.js";
 import "./ui/customGuideAction.js";

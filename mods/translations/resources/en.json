@@ -60,6 +60,7 @@
                     "fixUI": "Fix UI",
                     "hqThumbnails": "Enable High Quality Thumbnails",
                     "longPress": "Enable Long Press Actions",
+                    "longPressSpeed": "Long Press OK for 2x Speed",
                     "shorts": "Enable Shorts",
                     "shortsAutoScroll": "Auto Scroll to Next Short",
                     "videoPreviews": "Enable Video Previews",

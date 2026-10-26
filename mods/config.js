@@ -23,6 +23,7 @@ const defaultConfig = {
   enableHqThumbnails: false,
   enableChapters: true,
   enableLongPress: true,
+  enableLongPressSpeed: true,
   enableShorts: true,
   enableShortsAutoScroll: true,
   dontCheckUpdateUntil: 0,
