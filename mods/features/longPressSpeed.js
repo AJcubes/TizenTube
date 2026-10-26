@@ -107,12 +107,34 @@ function getTargetVideos() {
 
 // Route segments, not raw substrings: a video ID containing "shorts" must not
 // make a regular watch page look like the feed.
-const SHORTS_ROUTE_RE = /(^|\/)shorts(\/|$|\?|&)/;
-const WATCH_ROUTE_RE = /(^|\/)watch(\/|$|\?|&)/;
+const SHORTS_ROUTE_RE = /(?:^|[\s/])shorts(?:$|[\s/?&#])/;
+const WATCH_ROUTE_RE = /(?:^|[\s/])watch(?:$|[\s/?&#])/;
 
+// Only the client route counts: the first segment of the hash (or pathname).
+// The trailing query is dropped so a "?next=/shorts/..." link cannot flip the
+// classification. The href is included because some builds expose the route
+// only there.
 function routeText() {
-    return ((location.hash || '') + ' ' + (location.pathname || '') + ' ' +
-        (location.href || '')).toLowerCase();
+    const parts = [];
+
+    const hash = (location.hash || '').toLowerCase();
+    if (hash) parts.push(hash.replace(/^#/, '').split('?')[0]);
+
+    const pathname = (location.pathname || '').toLowerCase();
+    if (pathname) parts.push(pathname);
+
+    const href = (location.href || '').toLowerCase();
+    const noOrigin = href.replace(/^[a-z]+:\/\/[^/]*/, '');
+    const hashIndex = noOrigin.indexOf('#');
+    const beforeHash = (hashIndex === -1 ? noOrigin : noOrigin.slice(0, hashIndex))
+        .split('?')[0];
+    const fragment = hashIndex === -1
+        ? ''
+        : noOrigin.slice(hashIndex + 1).split('?')[0];
+    if (beforeHash) parts.push(beforeHash);
+    if (fragment) parts.push(fragment);
+
+    return parts.join(' ');
 }
 
 function isShortsRoute() {

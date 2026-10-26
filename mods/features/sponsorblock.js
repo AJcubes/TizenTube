@@ -96,12 +96,42 @@ function visibleVideo() {
 
 // Match a route segment, not a raw substring: a watch URL whose video ID
 // happens to contain "shorts" is still a regular video.
-const SHORTS_ROUTE_RE = /(^|\/)shorts(\/|$|\?|&)/;
-const WATCH_ROUTE_RE = /(^|\/)watch(\/|$|\?|&)/;
+const SHORTS_ROUTE_RE = /(?:^|[\s/])shorts(?:$|[\s/?&#])/;
+const WATCH_ROUTE_RE = /(?:^|[\s/])watch(?:$|[\s/?&#])/;
 
+// Only the client route counts: the first segment of the hash (or pathname).
+// The trailing query is dropped so a "?next=/shorts/..." link cannot flip the
+// classification. The href is included because some builds expose the route
+// only there.
 function routeText() {
-  return ((location.hash || '') + ' ' + (location.pathname || '') + ' ' +
-    (location.href || '')).toLowerCase();
+  const parts = [];
+
+  const hash = (location.hash || '').toLowerCase();
+  if (hash) parts.push(hash.replace(/^#/, '').split('?')[0]);
+
+  const pathname = (location.pathname || '').toLowerCase();
+  if (pathname) parts.push(pathname);
+
+  const href = (location.href || '').toLowerCase();
+  const noOrigin = href.replace(/^[a-z]+:\/\/[^/]*/, '');
+  const hashIndex = noOrigin.indexOf('#');
+  const beforeHash = (hashIndex === -1 ? noOrigin : noOrigin.slice(0, hashIndex))
+    .split('?')[0];
+  const fragment = hashIndex === -1
+    ? ''
+    : noOrigin.slice(hashIndex + 1).split('?')[0];
+  if (beforeHash) parts.push(beforeHash);
+  if (fragment) parts.push(fragment);
+
+  return parts.join(' ');
+}
+
+// The Short ID named by the current route, if any.
+function routeShortsId() {
+  const hash = (location.hash || '').toLowerCase();
+  const source = hash || (location.href || '').toLowerCase();
+  const match = source.match(/\/shorts\/([a-z0-9_-]{6,})/);
+  return match ? match[1] : null;
 }
 
 function isShortsRoute() {
@@ -167,9 +197,11 @@ function playerVideoId() {
 
 // The Short that is actually on screen, or null when this is a regular video.
 function shortsVideoId() {
-  // The watch route is unambiguous. Leave Shorts mode immediately so a short
-  // regular video is not classified as a Short after the feed.
-  if (isWatchRoute()) {
+  // Normally the watch route is unambiguous: leave Shorts mode immediately so
+  // a short regular video is not classified as a Short after the feed. The
+  // exception is a positive Shorts signal (the player still says
+  // "shortspage"), which wins over a stale watch hash.
+  if (isWatchRoute() && !hasShortsSignal()) {
     shortsMode = false;
     return null;
   }
@@ -187,9 +219,22 @@ function shortsVideoId() {
   const fromPlayer = playerVideoId();
   if (fromPlayer) return fromPlayer;
 
-  const source = (location.hash || '') + ' ' + location.href;
-  const match = source.match(/\/shorts\/([A-Za-z0-9_-]{6,})/);
-  return match ? match[1] : null;
+  return routeShortsId();
+}
+
+// A handler only skips a Short when the player (or, when the player exposes no
+// video data, the route) positively confirms it is still that same Short. A
+// missing ID is not proof: during a swipe the player data can be empty for a
+// moment while the hash still names the previous Short.
+function confirmsShortId(videoID) {
+  if (!videoID) return false;
+
+  const player = getPlayer();
+  if (player && typeof player.getVideoData === 'function') {
+    return playerVideoId() === videoID;
+  }
+
+  return routeShortsId() === videoID;
 }
 
 function resolveVideo() {
@@ -456,10 +501,7 @@ class SponsorBlockHandler {
 
     // The feed may have moved on before the poll swapped handlers; never skip
     // using the previous Short's segments.
-    if (this.isShorts) {
-      const activeId = playerVideoId();
-      if (activeId && activeId !== this.videoID) return;
-    }
+    if (this.isShorts && !confirmsShortId(this.videoID)) return;
 
     if (this.video.paused) {
       console.info(this.videoID, 'Currently paused, ignoring...');
@@ -503,6 +545,7 @@ class SponsorBlockHandler {
       // The handler may have been swapped to the next Short after this timer
       // was queued.
       if (!this.active) return;
+      if (this.isShorts && !confirmsShortId(this.videoID)) return;
       if (this.video.paused) {
         console.info(this.videoID, 'Currently paused, ignoring...');
         return;
