@@ -286,7 +286,11 @@
         "playbackSpeed": {
             "title": "Playback Speed",
             "button": "Speed Controls",
-            "fixStuttering": "Fix stuttering (1.0001x)"
+            "fixStuttering": "Fix stuttering (1.0001x)",
+            "holdOn": "2x Speed On",
+            "holdOnSubtitle": "Release OK to return to normal speed",
+            "holdOff": "2x Speed Off",
+            "holdOffSubtitle": "Playback speed restored"
         },
         "miniPlayer": "Mini Player",
         "pictureInPicture": "Picture in Picture",
