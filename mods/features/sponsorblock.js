@@ -126,11 +126,11 @@ function routeText() {
   return parts.join(' ');
 }
 
-// The Short ID named by the current route, if any.
+// The Short ID named by the current route, if any. Video IDs are
+// case-sensitive, so the original case must be preserved for the API hash.
 function routeShortsId() {
-  const hash = (location.hash || '').toLowerCase();
-  const source = hash || (location.href || '').toLowerCase();
-  const match = source.match(/\/shorts\/([a-z0-9_-]{6,})/);
+  const source = (location.hash || '') || (location.href || '');
+  const match = source.match(/\/shorts\/([A-Za-z0-9_-]{6,})/i);
   return match ? match[1] : null;
 }
 
@@ -225,13 +225,17 @@ function shortsVideoId() {
 // A handler only skips a Short when the player (or, when the player exposes no
 // video data, the route) positively confirms it is still that same Short. A
 // missing ID is not proof: during a swipe the player data can be empty for a
-// moment while the hash still names the previous Short.
-function confirmsShortId(videoID) {
+// moment while the hash still names the previous Short. expectedPlayerId is the
+// ID the player reported when this handler was created; if it was known and the
+// player has since gone blank, the route is stale and must not be trusted.
+function confirmsShortId(videoID, expectedPlayerId) {
   if (!videoID) return false;
 
   const player = getPlayer();
   if (player && typeof player.getVideoData === 'function') {
-    return playerVideoId() === videoID;
+    const fromPlayer = playerVideoId();
+    if (fromPlayer) return fromPlayer === videoID;
+    if (expectedPlayerId) return false;
   }
 
   return routeShortsId() === videoID;
@@ -271,6 +275,9 @@ class SponsorBlockHandler {
   constructor(videoID, isShorts) {
     this.videoID = videoID;
     this.isShorts = !!isShorts;
+    // Remember what the player reported at bind time so a later blank read can
+    // be distinguished from "this player never exposes video data".
+    this.boundPlayerId = this.isShorts ? playerVideoId() : null;
   }
 
   async init() {
@@ -501,7 +508,7 @@ class SponsorBlockHandler {
 
     // The feed may have moved on before the poll swapped handlers; never skip
     // using the previous Short's segments.
-    if (this.isShorts && !confirmsShortId(this.videoID)) return;
+    if (this.isShorts && !confirmsShortId(this.videoID, this.boundPlayerId)) return;
 
     if (this.video.paused) {
       console.info(this.videoID, 'Currently paused, ignoring...');
@@ -545,7 +552,7 @@ class SponsorBlockHandler {
       // The handler may have been swapped to the next Short after this timer
       // was queued.
       if (!this.active) return;
-      if (this.isShorts && !confirmsShortId(this.videoID)) return;
+      if (this.isShorts && !confirmsShortId(this.videoID, this.boundPlayerId)) return;
       if (this.video.paused) {
         console.info(this.videoID, 'Currently paused, ignoring...');
         return;
