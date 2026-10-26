@@ -140,7 +140,7 @@ app.all('*', (req, res) => {
                 return response.text().then((text) => {
                     if (req.url.indexOf('/tv') === 0 && req.url.indexOf('/tv_config') === -1) {
                         // Insert the userscript for TizenTube
-                        text += `<script src="https://cdn.jsdelivr.net/gh/AJcubes/TizenTube@b1f9ad01ea67c7c69abc818414ce2db5dd146164/dist/userScript.js?ver=${Date.now()}"></script>`;
+                        text += `<script src="https://cdn.jsdelivr.net/gh/AJcubes/TizenTube@5ee816227539ccd69ac1c8227c70e97217820b53/dist/userScript.js?ver=${Date.now()}"></script>`;
                     }
 
                     const proxyPrefix = `http://localhost:${PORT}/cors-bypass/`;
