@@ -649,17 +649,26 @@ class SponsorBlockHandler {
 // shows my lack of understanding of javascript. (or both)
 window.sponsorblock = null;
 
+function sponsorBlockEnabledFor(isShorts) {
+  if (!configRead('enableSponsorBlock')) return false;
+  return !isShorts || configRead('enableSponsorBlockShorts');
+}
+
 function syncHandler() {
   const resolved = resolveVideo();
   const videoID = resolved.videoID;
+  const enabled = sponsorBlockEnabledFor(resolved.isShorts);
   // Also recreate when only the classification changed: the first poll can
   // happen before metadata is known, and the handler must stop treating a
-  // regular video as a Short once that resolves.
+  // regular video as a Short once that resolves. Toggling the Shorts setting
+  // off must also tear down an existing Shorts handler.
   const needsReload =
     videoID &&
-    (!window.sponsorblock ||
-      window.sponsorblock.videoID != videoID ||
-      window.sponsorblock.isShorts !== resolved.isShorts);
+    (enabled
+      ? !window.sponsorblock ||
+        window.sponsorblock.videoID != videoID ||
+        window.sponsorblock.isShorts !== resolved.isShorts
+      : !!window.sponsorblock);
 
   if (!needsReload) {
     if (window.sponsorblock && window.sponsorblock.reattachIfNeeded) {
@@ -684,7 +693,7 @@ function syncHandler() {
     window.sponsorblock = null;
   }
 
-  if (configRead('enableSponsorBlock')) {
+  if (enabled) {
     window.sponsorblock = new SponsorBlockHandler(videoID, resolved.isShorts);
     window.sponsorblock.init();
   } else {

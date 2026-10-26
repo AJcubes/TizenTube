@@ -201,6 +201,10 @@ export default function modernUI(update, parameters) {
                     ]
                 },
                 {
+                    name: t('settings.options.sponsorblock.options.enableSBShorts'),
+                    value: 'enableSponsorBlockShorts'
+                },
+                {
                     name: t('settings.options.sponsorblock.options.showSBToasts'),
                     value: 'enableSponsorBlockToasts'
                 }
