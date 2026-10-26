@@ -105,8 +105,26 @@ function getTargetVideos() {
     return best ? [best] : [];
 }
 
+// Route segments, not raw substrings: a video ID containing "shorts" must not
+// make a regular watch page look like the feed.
+const SHORTS_ROUTE_RE = /(^|\/)shorts(\/|$|\?|&)/;
+const WATCH_ROUTE_RE = /(^|\/)watch(\/|$|\?|&)/;
+
+function routeText() {
+    return ((location.hash || '') + ' ' + (location.pathname || '') + ' ' +
+        (location.href || '')).toLowerCase();
+}
+
+function isShortsRoute() {
+    return SHORTS_ROUTE_RE.test(routeText());
+}
+
+function isWatchRoute() {
+    return WATCH_ROUTE_RE.test(routeText());
+}
+
 function isShorts() {
-    if (location.href.toLowerCase().indexOf('shorts') !== -1) return true;
+    if (isShortsRoute()) return true;
 
     const player = getPlayer();
     if (!player || typeof player.getVideoStats !== 'function') return false;
@@ -123,7 +141,7 @@ function isShorts() {
 // Shorts are deliberately excluded: the burst fought the feed's per-Short
 // playbackRate resets, and a long press there is not useful.
 function isPlaybackRoute() {
-    return location.href.indexOf('/watch') !== -1 && !isShorts();
+    return isWatchRoute() && !isShorts();
 }
 
 function focusedElement() {

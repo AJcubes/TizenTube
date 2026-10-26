@@ -94,8 +94,26 @@ function visibleVideo() {
   return bestScore > 0 ? best : null;
 }
 
+// Match a route segment, not a raw substring: a watch URL whose video ID
+// happens to contain "shorts" is still a regular video.
+const SHORTS_ROUTE_RE = /(^|\/)shorts(\/|$|\?|&)/;
+const WATCH_ROUTE_RE = /(^|\/)watch(\/|$|\?|&)/;
+
+function routeText() {
+  return ((location.hash || '') + ' ' + (location.pathname || '') + ' ' +
+    (location.href || '')).toLowerCase();
+}
+
+function isShortsRoute() {
+  return SHORTS_ROUTE_RE.test(routeText());
+}
+
+function isWatchRoute() {
+  return WATCH_ROUTE_RE.test(routeText());
+}
+
 function hasShortsSignal() {
-  if (location.href.toLowerCase().indexOf('shorts') !== -1) return true;
+  if (isShortsRoute()) return true;
 
   const player = getPlayer();
   if (!player || typeof player.getVideoStats !== 'function') return false;
@@ -149,6 +167,13 @@ function playerVideoId() {
 
 // The Short that is actually on screen, or null when this is a regular video.
 function shortsVideoId() {
+  // The watch route is unambiguous. Leave Shorts mode immediately so a short
+  // regular video is not classified as a Short after the feed.
+  if (isWatchRoute()) {
+    shortsMode = false;
+    return null;
+  }
+
   const video = visibleVideo();
   if (!updateShortsMode(video)) return null;
 
@@ -577,9 +602,14 @@ window.sponsorblock = null;
 function syncHandler() {
   const resolved = resolveVideo();
   const videoID = resolved.videoID;
+  // Also recreate when only the classification changed: the first poll can
+  // happen before metadata is known, and the handler must stop treating a
+  // regular video as a Short once that resolves.
   const needsReload =
     videoID &&
-    (!window.sponsorblock || window.sponsorblock.videoID != videoID);
+    (!window.sponsorblock ||
+      window.sponsorblock.videoID != videoID ||
+      window.sponsorblock.isShorts !== resolved.isShorts);
 
   if (!needsReload) {
     if (window.sponsorblock && window.sponsorblock.reattachIfNeeded) {
