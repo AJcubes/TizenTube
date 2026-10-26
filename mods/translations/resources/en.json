@@ -33,7 +33,6 @@
                         "music_offtopic": "Skip Off-Topic Music Segments",
                         "highlights": "Enable Highlights"
                     },
-                    "enableSBShorts": "Enable SponsorBlock in Shorts",
                     "showSBToasts": "Show SponsorBlock Toasts"
                 }
             },
